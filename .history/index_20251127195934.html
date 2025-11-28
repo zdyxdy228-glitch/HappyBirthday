@@ -1,0 +1,711 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>生日快乐 - 互动粒子魔法</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Three.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <!-- MediaPipe Hands -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #050505;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            color: white;
+        }
+        
+        #canvas-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            z-index: 1;
+        }
+
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 10;
+            pointer-events: none; /* 让鼠标事件穿透到 Canvas */
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            padding: 2rem;
+            box-sizing: border-box;
+        }
+
+        .interactive-element {
+            pointer-events: auto;
+        }
+
+        /* 隐藏视频输入元素 */
+        .input_video {
+            display: none;
+        }
+
+        /* 玻璃拟态卡片 */
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 1rem;
+        }
+
+        .fade-in {
+            animation: fadeIn 1s ease-in forwards;
+        }
+
+        .pulse {
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+            100% { transform: scale(1); }
+        }
+
+        #start-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.85);
+            z-index: 50;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            pointer-events: auto;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- 隐藏的视频源，用于MediaPipe处理 -->
+    <video class="input_video"></video>
+
+    <!-- Canvas 容器 -->
+    <div id="canvas-container"></div>
+
+    <!-- 启动遮罩 -->
+    <div id="start-overlay">
+        <div class="text-center max-w-md p-8 glass-panel">
+            <h1 class="text-4xl font-bold mb-4 text-pink-400">✨ 粒子魔法生日会 ✨</h1>
+            <p class="mb-6 text-gray-300">
+                请允许访问<b>摄像头</b>（捕捉手势）和<b>麦克风</b>（吹蜡烛）。<br>
+                体验专属于你的 3D 互动时刻。
+            </p>
+            <button id="start-btn" class="px-8 py-3 bg-gradient-to-r from-pink-500 to-purple-600 rounded-full font-bold text-lg hover:scale-105 transition transform shadow-lg shadow-pink-500/50">
+                开始体验
+            </button>
+        </div>
+    </div>
+
+    <!-- 主 UI 层 -->
+    <div id="ui-layer" style="display: none;">
+        <!-- 顶部栏 -->
+        <div class="flex justify-between items-start">
+            <div class="glass-panel p-4 interactive-element">
+                <h2 class="text-xl font-bold text-pink-300 mb-1">Status</h2>
+                <div id="status-text" class="text-sm text-white font-mono">等待手势指令...</div>
+            </div>
+            
+            <div class="glass-panel p-3 flex gap-4 interactive-element">
+                <div class="flex flex-col items-center">
+                    <label class="text-xs text-gray-400 mb-1">粒子颜色</label>
+                    <input type="color" id="color-picker" value="#ff69b4" class="w-8 h-8 rounded cursor-pointer border-none bg-transparent">
+                </div>
+                <button id="fullscreen-btn" class="p-2 hover:bg-white/10 rounded transition">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
+                </button>
+            </div>
+        </div>
+
+        <!-- 中心提示文字 -->
+        <div id="center-instruction" class="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 text-center pointer-events-none w-full">
+            <h2 id="instruction-text" class="text-4xl md:text-6xl font-bold text-white drop-shadow-[0_0_10px_rgba(255,105,180,0.8)] transition-all duration-500">
+                👋 请举起双手
+            </h2>
+            <p id="sub-instruction" class="mt-4 text-xl text-pink-200 opacity-80">让魔法开始</p>
+        </div>
+
+        <!-- 底部控制 -->
+        <div class="flex justify-center mb-8">
+            <div id="camera-preview" class="w-32 h-24 glass-panel overflow-hidden relative interactive-element hidden md:block">
+                 <!-- 这里的 canvas 是 mediapipe 的调试视图，我们用JS动态绘制 -->
+                 <canvas id="output_canvas" width="160" height="120" class="w-full h-full object-cover"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        /**
+         * 状态机与全局变量
+         */
+        const STATE = {
+            IDLE: 0,        // 等待举手
+            COUNTDOWN: 1,   // 3, 2, 1
+            CAKE: 2,        // 显示蛋糕
+            BLOWING: 3,     // 等待吹气
+            CELEBRATION: 4  // 庆祝/彩带
+        };
+        
+        let currentState = STATE.IDLE;
+        let particleSystem, scene, camera, renderer;
+        let particlesData = [];
+        const PARTICLE_COUNT = 4000;
+        let baseColor = new THREE.Color(0xff69b4); // Hot pink
+        let time = 0;
+        
+        // 交互变量
+        let handDetected = false;
+        let blowVolume = 0;
+        let isBlowing = false;
+        let mouse = new THREE.Vector2();
+        
+        // 音频上下文
+        let audioContext;
+        let analyser;
+        let microphone;
+
+        // Dom Elements
+        const statusText = document.getElementById('status-text');
+        const instructionText = document.getElementById('instruction-text');
+        const subInstruction = document.getElementById('sub-instruction');
+        const colorPicker = document.getElementById('color-picker');
+
+        /**
+         * 1. Three.js 场景初始化
+         */
+        function initThree() {
+            const container = document.getElementById('canvas-container');
+            
+            scene = new THREE.Scene();
+            // 添加一点环境雾
+            scene.fog = new THREE.FogExp2(0x050505, 0.002);
+
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.z = 50;
+
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            container.appendChild(renderer.domElement);
+
+            // 创建粒子系统
+            createParticles();
+
+            // 灯光
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+            scene.add(ambientLight);
+            
+            const pointLight = new THREE.PointLight(0xffffff, 1);
+            pointLight.position.set(10, 10, 10);
+            scene.add(pointLight);
+
+            // 事件监听
+            window.addEventListener('resize', onWindowResize, false);
+            document.addEventListener('mousemove', onMouseMove, false);
+            colorPicker.addEventListener('input', (e) => {
+                baseColor.set(e.target.value);
+            });
+            document.getElementById('fullscreen-btn').addEventListener('click', toggleFullScreen);
+        }
+
+        /**
+         * 2. 粒子系统核心逻辑
+         */
+        function createParticles() {
+            const geometry = new THREE.BufferGeometry();
+            const positions = new Float32Array(PARTICLE_COUNT * 3);
+            const colors = new Float32Array(PARTICLE_COUNT * 3);
+            const sizes = new Float32Array(PARTICLE_COUNT);
+
+            particlesData = [];
+
+            for (let i = 0; i < PARTICLE_COUNT; i++) {
+                // 初始位置：随机分布的球体
+                const x = (Math.random() - 0.5) * 100;
+                const y = (Math.random() - 0.5) * 100;
+                const z = (Math.random() - 0.5) * 50;
+
+                positions[i * 3] = x;
+                positions[i * 3 + 1] = y;
+                positions[i * 3 + 2] = z;
+
+                colors[i * 3] = baseColor.r;
+                colors[i * 3 + 1] = baseColor.g;
+                colors[i * 3 + 2] = baseColor.b;
+
+                sizes[i] = Math.random() * 2;
+
+                // 存储每个粒子的数据，用于动画插值
+                particlesData.push({
+                    current: new THREE.Vector3(x, y, z),
+                    target: new THREE.Vector3(x, y, z), // 目标位置
+                    velocity: new THREE.Vector3(0, 0, 0),
+                    speed: 0.05 + Math.random() * 0.05,
+                    isFlame: false // 标记是否为蜡烛火焰粒子
+                });
+            }
+
+            geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+            geometry.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
+
+            // 自定义 Shader 材质，为了更好看的粒子效果
+            const material = new THREE.PointsMaterial({
+                size: 1.5,
+                vertexColors: true,
+                map: createCircleTexture(),
+                transparent: true,
+                opacity: 0.8,
+                depthWrite: false,
+                blending: THREE.AdditiveBlending
+            });
+
+            particleSystem = new THREE.Points(geometry, material);
+            scene.add(particleSystem);
+        }
+
+        function createCircleTexture() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 32;
+            canvas.height = 32;
+            const context = canvas.getContext('2d');
+            const center = 16;
+            const radius = 16;
+            
+            const gradient = context.createRadialGradient(center, center, 0, center, center, radius);
+            gradient.addColorStop(0, 'rgba(255,255,255,1)');
+            gradient.addColorStop(1, 'rgba(255,255,255,0)');
+            
+            context.fillStyle = gradient;
+            context.fillRect(0, 0, 32, 32);
+            
+            const texture = new THREE.CanvasTexture(canvas);
+            return texture;
+        }
+
+        /**
+         * 3. 形状生成器 (Text to Points & Geometry to Points)
+         */
+        
+        // 辅助：从文字生成点集
+        function getPointsFromText(text, size = 10) {
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            canvas.width = 200;
+            canvas.height = 200;
+            ctx.font = 'bold 100px Arial';
+            ctx.fillStyle = 'white';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(text, 100, 100);
+
+            const imageData = ctx.getImageData(0, 0, 200, 200);
+            const points = [];
+            
+            // 扫描像素
+            for (let y = 0; y < 200; y += 4) {
+                for (let x = 0; x < 200; x += 4) {
+                    const alpha = imageData.data[(y * 200 + x) * 4 + 3];
+                    if (alpha > 128) {
+                        points.push(new THREE.Vector3(
+                            (x - 100) / 4, // Scale down
+                            -(y - 100) / 4, // Flip Y
+                            0
+                        ));
+                    }
+                }
+            }
+            return points;
+        }
+
+        // 辅助：生成蛋糕形状
+        function getCakePoints() {
+            const points = [];
+            const layers = [
+                { r: 15, h: 5, y: -10 }, // Bottom layer
+                { r: 10, h: 5, y: -5 }   // Top layer
+            ];
+
+            // 蛋糕体
+            for(let i=0; i<3000; i++) {
+                const layer = Math.random() > 0.6 ? layers[1] : layers[0];
+                const theta = Math.random() * Math.PI * 2;
+                // 填充圆柱体
+                const r = Math.sqrt(Math.random()) * layer.r; 
+                const y = layer.y + Math.random() * layer.h;
+                
+                points.push({
+                    vec: new THREE.Vector3(r * Math.cos(theta), y, r * Math.sin(theta)),
+                    type: 'cake'
+                });
+            }
+
+            // 蜡烛 (细圆柱)
+            for(let i=0; i<200; i++) {
+                const r = Math.random() * 0.8;
+                const theta = Math.random() * Math.PI * 2;
+                const y = Math.random() * 6; // height 6
+                points.push({
+                    vec: new THREE.Vector3(r * Math.cos(theta), y, r * Math.sin(theta)),
+                    type: 'candle'
+                });
+            }
+
+            // 火焰 (顶部聚集)
+            for(let i=0; i<300; i++) {
+                points.push({
+                    vec: new THREE.Vector3(0, 7, 0), // Base of flame
+                    type: 'flame'
+                });
+            }
+
+            return points;
+        }
+
+        /**
+         * 4. 动画循环与逻辑控制
+         */
+        
+        function setTargetShape(shapeType, param) {
+            let targets = [];
+            
+            if (shapeType === 'text') {
+                targets = getPointsFromText(param);
+                // 将文字点分配给粒子，多余的粒子随机分布
+                particlesData.forEach((p, i) => {
+                    p.isFlame = false;
+                    if (i < targets.length) {
+                        // 放大一点文字
+                        p.target.copy(targets[i]).multiplyScalar(2.5);
+                    } else {
+                        // 背景粒子
+                        const theta = Math.random() * Math.PI * 2;
+                        const r = 30 + Math.random() * 10;
+                        p.target.set(r * Math.cos(theta), (Math.random()-0.5)*40, r * Math.sin(theta));
+                    }
+                });
+            } else if (shapeType === 'cake') {
+                const cakePoints = getCakePoints();
+                particlesData.forEach((p, i) => {
+                    if (i < cakePoints.length) {
+                        p.target.copy(cakePoints[i].vec);
+                        p.isFlame = (cakePoints[i].type === 'flame');
+                    } else {
+                        // 形成底座光环
+                        const theta = Math.random() * Math.PI * 2;
+                        const r = 20 + Math.random() * 20;
+                        p.target.set(r * Math.cos(theta), -15, r * Math.sin(theta));
+                        p.isFlame = false;
+                    }
+                });
+            } else if (shapeType === 'explode') {
+                particlesData.forEach(p => {
+                    p.isFlame = false;
+                    p.target.set(
+                        (Math.random() - 0.5) * 200,
+                        (Math.random() - 0.5) * 200,
+                        (Math.random() - 0.5) * 100
+                    );
+                    p.speed = 0.02; // 慢速飘落
+                });
+            }
+        }
+
+        function updateParticles() {
+            const positions = particleSystem.geometry.attributes.position.array;
+            const colors = particleSystem.geometry.attributes.color.array;
+            
+            time += 0.05;
+
+            for (let i = 0; i < PARTICLE_COUNT; i++) {
+                const p = particlesData[i];
+                
+                // 1. 移动逻辑 (Lerp to target)
+                // 如果是庆祝状态，添加重力和风力
+                if (currentState === STATE.CELEBRATION) {
+                    p.current.y -= p.speed * 2; // Gravity
+                    p.current.x += Math.sin(time + i) * 0.1; // Wind
+                    if (p.current.y < -40) p.current.y = 40; // Loop
+                } else {
+                    // 标准插值运动
+                    let target = p.target.clone();
+
+                    // 火焰抖动效果
+                    if (p.isFlame && currentState === STATE.BLOWING) {
+                        target.x += (Math.random() - 0.5) * 1.5;
+                        target.y += Math.random() * 3; // 向上窜
+                        target.z += (Math.random() - 0.5) * 1.5;
+                        
+                        // 颜色设为橙/红
+                        colors[i * 3] = 1.0;     // R
+                        colors[i * 3 + 1] = 0.5; // G
+                        colors[i * 3 + 2] = 0.0; // B
+                    } else if (currentState === STATE.CAKE && p.isFlame) {
+                        // 熄灭后的烟雾
+                        // 不做特殊处理，随风飘或变灰
+                    } else {
+                        // 普通颜色恢复 (Lerp to baseColor)
+                        if (currentState !== STATE.CELEBRATION) { // 庆祝时保持多彩
+                            colors[i * 3] += (baseColor.r - colors[i * 3]) * 0.1;
+                            colors[i * 3 + 1] += (baseColor.g - colors[i * 3 + 1]) * 0.1;
+                            colors[i * 3 + 2] += (baseColor.b - colors[i * 3 + 2]) * 0.1;
+                        }
+                    }
+
+                    // 手部交互：如果检测到手，粒子避开手的位置
+                    if (handDetected && currentState === STATE.IDLE) {
+                        // 简单的排斥效果，如果有手部坐标（此处简化，未传入具体3D坐标，仅演示逻辑）
+                        // 实际可以将 mediapipe 的 x,y 映射到 3D 空间进行排斥
+                    }
+
+                    p.current.lerp(target, 0.05);
+                }
+
+                positions[i * 3] = p.current.x;
+                positions[i * 3 + 1] = p.current.y;
+                positions[i * 3 + 2] = p.current.z;
+                
+                // 随机闪烁
+                if (Math.random() > 0.95) {
+                   // colors[i*3] = 1;
+                   // colors[i*3+1] = 1;
+                   // colors[i*3+2] = 1;
+                }
+            }
+
+            particleSystem.geometry.attributes.position.needsUpdate = true;
+            particleSystem.geometry.attributes.color.needsUpdate = true;
+
+            // 整体旋转
+            if (currentState === STATE.CAKE || currentState === STATE.BLOWING) {
+                particleSystem.rotation.y += 0.005;
+            } else {
+                particleSystem.rotation.y += 0.001;
+            }
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            updateParticles();
+            checkAudioBlow();
+            renderer.render(scene, camera);
+        }
+
+        /**
+         * 5. 流程控制逻辑 (The Story)
+         */
+        
+        function startCountdown() {
+            if (currentState !== STATE.IDLE) return;
+            currentState = STATE.COUNTDOWN;
+            statusText.innerText = "倒数开始...";
+            instructionText.innerText = "3";
+            subInstruction.innerText = "准备好许愿";
+            setTargetShape('text', "3");
+
+            setTimeout(() => {
+                instructionText.innerText = "2";
+                setTargetShape('text', "2");
+            }, 1500);
+
+            setTimeout(() => {
+                instructionText.innerText = "1";
+                setTargetShape('text', "1");
+            }, 3000);
+
+            setTimeout(() => {
+                startCakePhase();
+            }, 4500);
+        }
+
+        function startCakePhase() {
+            currentState = STATE.BLOWING; // 显示蛋糕并等待吹气
+            setTargetShape('cake');
+            
+            instructionText.innerText = "23岁女生，生日快乐！";
+            instructionText.className = "text-3xl md:text-5xl font-bold text-pink-300 drop-shadow-lg";
+            subInstruction.innerText = "请靠近麦克风，用力吹灭蜡烛 🎂💨";
+            statusText.innerText = "检测吹气中...";
+            
+            // 播放生日歌的逻辑可以在这里加 (Browser strict autoplay policy might block it)
+        }
+
+        function startCelebration() {
+            currentState = STATE.CELEBRATION;
+            statusText.innerText = "🎉 生日快乐！ 🎉";
+            instructionText.innerText = "愿望成真！✨";
+            subInstruction.innerText = "";
+            
+            setTargetShape('explode');
+            
+            // 随机化颜色用于五彩纸屑
+            const colors = particleSystem.geometry.attributes.color.array;
+            for(let i=0; i<PARTICLE_COUNT; i++) {
+                colors[i*3] = Math.random();
+                colors[i*3+1] = Math.random();
+                colors[i*3+2] = Math.random();
+            }
+        }
+
+        /**
+         * 6. Audio / Microphone (吹气检测)
+         */
+        function initAudio() {
+            if (!navigator.mediaDevices.getUserMedia) return;
+            navigator.mediaDevices.getUserMedia({ audio: true })
+                .then(function(stream) {
+                    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                    analyser = audioContext.createAnalyser();
+                    microphone = audioContext.createMediaStreamSource(stream);
+                    microphone.connect(analyser);
+                    analyser.fftSize = 256;
+                })
+                .catch(function(err) {
+                    console.error('Mic error:', err);
+                    statusText.innerText = "麦克风访问失败，无法吹蜡烛";
+                });
+        }
+
+        function checkAudioBlow() {
+            if (currentState !== STATE.BLOWING || !analyser) return;
+
+            const dataArray = new Uint8Array(analyser.frequencyBinCount);
+            analyser.getByteFrequencyData(dataArray);
+
+            // 计算平均音量
+            let sum = 0;
+            // 吹气通常主要是低频噪音
+            for(let i = 0; i < dataArray.length / 2; i++) {
+                sum += dataArray[i];
+            }
+            const average = sum / (dataArray.length / 2);
+
+            // 阈值检测 (根据设备敏感度可能需要调整，40-50通常是近距离吹气的强度)
+            if (average > 45) {
+                blowVolume++;
+                if (blowVolume > 10) { // 持续检测到一小段时间
+                    startCelebration();
+                }
+            } else {
+                blowVolume = Math.max(0, blowVolume - 1);
+            }
+        }
+
+        /**
+         * 7. MediaPipe Hands Setup
+         */
+        const videoElement = document.getElementsByClassName('input_video')[0];
+        const canvasElement = document.getElementById('output_canvas');
+        const canvasCtx = canvasElement.getContext('2d');
+
+        function onResults(results) {
+            // 绘制预览（可选，增强用户信心）
+            canvasCtx.save();
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+            canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+            
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                handDetected = true;
+                
+                // 绘制骨架
+                for (const landmarks of results.multiHandLandmarks) {
+                    drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS, {color: '#ff69b4', lineWidth: 2});
+                    drawLandmarks(canvasCtx, landmarks, {color: '#ffffff', lineWidth: 1, radius: 2});
+                }
+                
+                // 逻辑触发：如果检测到手且处于闲置状态，触发倒数
+                if (currentState === STATE.IDLE) {
+                    statusText.innerText = "检测到双手！魔法启动...";
+                    startCountdown();
+                }
+            } else {
+                handDetected = false;
+            }
+            canvasCtx.restore();
+        }
+
+        const hands = new Hands({locateFile: (file) => {
+            return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+        }});
+        
+        hands.setOptions({
+            maxNumHands: 2,
+            modelComplexity: 1,
+            minDetectionConfidence: 0.5,
+            minTrackingConfidence: 0.5
+        });
+        
+        hands.onResults(onResults);
+
+        /**
+         * 8. UI & Helper Functions
+         */
+        document.getElementById('start-btn').addEventListener('click', async () => {
+            document.getElementById('start-overlay').style.display = 'none';
+            document.getElementById('ui-layer').style.display = 'flex';
+            
+            // 启动音频
+            initAudio();
+            
+            // 启动 Three.js
+            initThree();
+            animate();
+            
+            // 启动摄像头
+            const cameraUtils = new Camera(videoElement, {
+                onFrame: async () => {
+                    await hands.send({image: videoElement});
+                },
+                width: 640,
+                height: 480
+            });
+            cameraUtils.start();
+        });
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function onMouseMove(event) {
+            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+        }
+
+        function toggleFullScreen() {
+            if (!document.fullscreenElement) {
+                document.documentElement.requestFullscreen();
+            } else {
+                if (document.exitFullscreen) {
+                    document.exitFullscreen();
+                }
+            }
+        }
+
+    </script>
+</body>
+</html>
